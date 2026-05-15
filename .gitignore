@@ -1,0 +1,30 @@
+# Evaluation data is not redistributed in this repo (includes per-test CSVs
+# and the large ensemble result CSVs that exceed GitHub's file size limit).
+evaluation/data/
+
+# Secrets — only the example template is committed.
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
