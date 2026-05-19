@@ -1,30 +1,33 @@
 {
-  "scorers": ["entailment", "noncontradiction", "semantic_density"],
+  "scorers": [
+    "entailment",
+    "noncontradiction",
+    "semantic_density"
+  ],
   "threshold": 0.335,
   "gate_floor": 0.235,
-  "aggregation": "gated_noisy_or",
-  "always_flag_test_codes": ["test_inkonsistenz_termin"],
+  "aggregation": "gated_soft_or",
   "scaling": {
-    "quantile_levels": [0.05, 0.95],
+    "quantile_levels": [
+      0.05,
+      0.95
+    ],
     "q05": {
-      "entailment": -0.997816214710474,
-      "noncontradiction": -0.9998849888642629,
-      "semantic_density": -0.9992453345401598
+      "entailment": 0.002183785289525986,
+      "noncontradiction": 0.00011501113573711419,
+      "semantic_density": 0.0007546654598401926
     },
     "q95": {
-      "entailment": -0.3815500008582603,
-      "noncontradiction": -0.6820558985074363,
-      "semantic_density": -0.6147205185831603
+      "entailment": 0.6184499991417397,
+      "noncontradiction": 0.31794410149256364,
+      "semantic_density": 0.38527948141683965
     }
-  },
-  "orientation_flipped": {
-    "entailment": true,
-    "noncontradiction": true,
-    "semantic_density": true
   },
   "second_stage_judge": {
     "enabled": true,
     "model": "openai/gpt-oss-120b",
+    "prompt_version": "answer_consistency_v3_critical_no_prompt_de",
+    "trial_name": "v3",
     "temperature": 0.0,
     "max_tokens": 500,
     "sees_original_prompt": false,

@@ -46,7 +46,6 @@ RANKING_KEEP_COLS = [
     "ap_error_lift_over_baseline",
     "roc_auc_error",
     "brier_error",
-    "flipped",
     "q05",
     "q95",
 ]
@@ -244,58 +243,53 @@ def build_metric_frame(df, metric, match_col="match"):
     return metric_frame[TEST_KEY + ["label", "error_label", "raw_score"]]
 
 
-def evaluate_metric(df, metric, match_col="match", auto_flip=True, agg_fn=soft_or, scale=True,
+def evaluate_metric(df, metric, match_col="match", agg_fn=soft_or, scale=True,
                     q_low=Q_LOW, q_high=Q_HIGH):
+    """Evaluate one scorer. Raw scores are UQLM/judge confidences in [0, 1],
+    so the error-oriented score is always 1 - raw. q05/q95 then map to [0, 1]."""
     metric_frame = build_metric_frame(df, metric, match_col=match_col)
     if metric_frame.empty:
         return None
 
-    best = None
-    for flipped in ([False, True] if auto_flip else [False]):
-        raw = metric_frame["raw_score"].to_numpy(dtype=float)
-        if scale:
-            oriented = -raw if flipped else raw
-            check_error_score, lo, hi = scale_to_error(oriented, q_low=q_low, q_high=q_high)
-        else:
-            check_error_score = (1.0 - raw) if flipped else raw
-            lo, hi = float("nan"), float("nan")
+    raw = metric_frame["raw_score"].to_numpy(dtype=float)
+    oriented = 1.0 - raw
+    if scale:
+        check_error_score, lo, hi = scale_to_error(oriented, q_low=q_low, q_high=q_high)
+    else:
+        check_error_score = oriented
+        lo, hi = float("nan"), float("nan")
 
-        temp = metric_frame[TEST_KEY + ["label", "error_label"]].copy()
-        temp["check_error_score"] = check_error_score
-        test_df = (
-            temp.groupby(TEST_KEY, as_index=False)
-            .agg(
-                label=("label", "first"),
-                error_label=("error_label", "first"),
-                test_error_score=("check_error_score", agg_fn),
-            )
-            .dropna(subset=["test_error_score"])
+    temp = metric_frame[TEST_KEY + ["label", "error_label"]].copy()
+    temp["check_error_score"] = check_error_score
+    test_df = (
+        temp.groupby(TEST_KEY, as_index=False)
+        .agg(
+            label=("label", "first"),
+            error_label=("error_label", "first"),
+            test_error_score=("check_error_score", agg_fn),
         )
+        .dropna(subset=["test_error_score"])
+    )
 
-        y_error = test_df["error_label"].astype(int).to_numpy()
-        y_correct = test_df["label"].astype(int).to_numpy()
-        error_scores = test_df["test_error_score"].astype(float).to_numpy()
-        correct_scores = 1.0 - error_scores
+    y_error = test_df["error_label"].astype(int).to_numpy()
+    y_correct = test_df["label"].astype(int).to_numpy()
+    error_scores = test_df["test_error_score"].astype(float).to_numpy()
+    correct_scores = 1.0 - error_scores
 
-        if len(y_error) < 10 or np.unique(y_error).size < 2:
-            return None
+    if len(y_error) < 10 or np.unique(y_error).size < 2:
+        return None
 
-        summary = summarize_ranking(y_correct, correct_scores)
-        result = {
-            **summary,
-            "roc_auc_error": float(roc_auc_score(y_error, error_scores)),
-            "brier_error": float(brier_score_loss(y_error, error_scores)),
-            "flipped": bool(flipped),
-            "q05": lo,
-            "q95": hi,
-        }
-        if best is None or result["average_precision_error"] > best["average_precision_error"]:
-            best = result
-
-    return best
+    summary = summarize_ranking(y_correct, correct_scores)
+    return {
+        **summary,
+        "roc_auc_error": float(roc_auc_score(y_error, error_scores)),
+        "brier_error": float(brier_score_loss(y_error, error_scores)),
+        "q05": lo,
+        "q95": hi,
+    }
 
 
-def evaluate_metric_files(file_glob, prefix, metrics, auto_flip=True, agg_fn=soft_or, scale=True,
+def evaluate_metric_files(file_glob, prefix, metrics, agg_fn=soft_or, scale=True,
                           q_low=Q_LOW, q_high=Q_HIGH):
     files = sorted(p for p in RESULTS_DIR.glob(file_glob) if ".bak_" not in p.name)
     if not files:
@@ -321,7 +315,7 @@ def evaluate_metric_files(file_glob, prefix, metrics, auto_flip=True, agg_fn=sof
             continue
 
         for metric in metrics_here:
-            result = evaluate_metric(df, metric, match_col="match", auto_flip=auto_flip,
+            result = evaluate_metric(df, metric, match_col="match",
                                      agg_fn=agg_fn, scale=scale, q_low=q_low, q_high=q_high)
             if result is not None:
                 rows.append({"model": model, "metric": metric, **result})
@@ -443,62 +437,54 @@ def choose_shared_threshold(summary_df, primary_metric, recall_floor=None):
 
 
 def learn_global_orientation_and_bounds(df_all, method, q_low=Q_LOW, q_high=Q_HIGH, agg_fn=soft_or, scale=True):
-    """Pick orientation (flip yes/no) and per-check q05/q95 by maximising
-    test-level AP_error on the pooled ensembles. When scale=False, q05/q95
-    are not used (returned as NaN) and orientation flips via 1-raw instead
-    of clipping to quantile bounds; this assumes raw scores are bounded in
-    [0, 1]."""
+    """Compute per-check q05/q95 for a scorer on the pooled ensembles. Raw
+    scores are UQLM/judge confidences in [0, 1] so the error-oriented score
+    is always 1 - raw. When scale=False q05/q95 are returned as NaN."""
     raw_values = df_all[method].to_numpy(dtype=float)
+    oriented = 1.0 - raw_values
 
-    candidates = []
-    for flipped in (False, True):
-        if scale:
-            oriented = -raw_values if flipped else raw_values
-            q05 = float(np.nanquantile(oriented, q_low))
-            q95 = float(np.nanquantile(oriented, q_high))
-            check_score = scale_with_fixed_bounds(oriented, q05, q95)
-        else:
-            check_score = (1.0 - raw_values) if flipped else raw_values
-            q05 = float("nan")
-            q95 = float("nan")
+    if scale:
+        q05 = float(np.nanquantile(oriented, q_low))
+        q95 = float(np.nanquantile(oriented, q_high))
+        check_score = scale_with_fixed_bounds(oriented, q05, q95)
+    else:
+        check_score = oriented
+        q05 = float("nan")
+        q95 = float("nan")
 
-        temp = df_all[TEST_KEY + ["label", "error_label"]].copy()
-        temp["check_error_score"] = check_score
+    temp = df_all[TEST_KEY + ["label", "error_label"]].copy()
+    temp["check_error_score"] = check_score
 
-        test_df = (
-            aggregate_check_error_to_tests(temp, "check_error_score", agg_fn=agg_fn)
-            .sort_values(TEST_KEY)
-            .reset_index(drop=True)
+    test_df = (
+        aggregate_check_error_to_tests(temp, "check_error_score", agg_fn=agg_fn)
+        .sort_values(TEST_KEY)
+        .reset_index(drop=True)
+    )
+
+    y_test = test_df["error_label"].astype(int).to_numpy()
+    if np.unique(y_test).size < 2:
+        ap_error = np.nan
+    else:
+        ap_error = float(
+            average_precision_score(
+                y_test,
+                test_df["test_error_score"].to_numpy(dtype=float),
+            )
         )
 
-        y_test = test_df["error_label"].astype(int).to_numpy()
-        if np.unique(y_test).size < 2:
-            ap_error = np.nan
-        else:
-            ap_error = float(
-                average_precision_score(
-                    y_test,
-                    test_df["test_error_score"].to_numpy(dtype=float),
-                )
-            )
-
-        candidates.append({
-            "method": method,
-            "flipped": bool(flipped),
-            "q05": q05,
-            "q95": q95,
-            "ap_error": ap_error,
-        })
-
-    return max(candidates, key=lambda x: (x["ap_error"] if x["ap_error"] == x["ap_error"] else -1.0))
+    return {
+        "method": method,
+        "q05": q05,
+        "q95": q95,
+        "ap_error": ap_error,
+    }
 
 
 def build_test_work(df, global_params, methods, agg_fn=soft_or, scale=True):
-    """Apply global orientation (and optional q05/q95 scaling) to each method,
-    mean across methods at the check level, then aggregate across checks at
-    the test level with agg_fn (default soft_or). When scale=False, raw scores
-    are taken as-is (with 1-raw on flipped scorers); this assumes raw values
-    are in [0, 1]."""
+    """Invert each scorer with 1 - raw (UQLM/judge scores are confidences in
+    [0, 1]), optionally rescale with the stored q05/q95, mean across methods
+    at the check level, then aggregate across checks at the test level with
+    agg_fn (default soft_or)."""
     work = df[CHECK_KEY + ["label", "error_label"] + list(methods)].copy()
     params_map = global_params.set_index("method").to_dict(orient="index")
 
@@ -506,13 +492,13 @@ def build_test_work(df, global_params, methods, agg_fn=soft_or, scale=True):
     for method in methods:
         p = params_map[method]
         raw = work[method].to_numpy(dtype=float)
+        oriented = 1.0 - raw
 
         col = f"{method}__errnorm"
         if scale:
-            oriented = -raw if p["flipped"] else raw
             work[col] = scale_with_fixed_bounds(oriented, p["q05"], p["q95"])
         else:
-            work[col] = (1.0 - raw) if p["flipped"] else raw
+            work[col] = oriented
         norm_cols.append(col)
 
     work["check_ensemble_error_score"] = work[norm_cols].mean(axis=1)
