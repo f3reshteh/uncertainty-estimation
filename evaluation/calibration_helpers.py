@@ -1,3 +1,4 @@
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -157,13 +158,42 @@ def require_constant_within_tests(df, label_col, context, group_cols=None):
         raise ValueError(f"Inconsistent test labels found for {context}: {sample}")
 
 
+@lru_cache(maxsize=None)
+def random_ap_exact(N, R):
+    # Bestgen (2015), doi:10.1515/pralin-2015-0007. Exact expected AP of a
+    # uniformly random ranking with R positives among N items. The prevalence
+    # R/N is only the large-N approximation and biases lift downwards on small,
+    # imbalanced groups.
+    if N <= 0 or R <= 0 or R > N:
+        return float("nan")
+    if R == N:
+        return 1.0
+    lfact = np.concatenate(([0.0], np.cumsum(np.log(np.arange(1, N + 1)))))
+    def log_binom(a, b):
+        return lfact[a] - lfact[b] - lfact[a - b]
+    log_denom = log_binom(N, 0)  # placeholder, overwritten per n below
+    ap = 0.0
+    for i in range(1, R + 1):
+        n_vals = np.arange(i, N - R + i + 1)
+        log_p = (
+            log_binom(R, i)
+            + np.array([log_binom(N - R, n - i) for n in n_vals])
+            - np.array([log_binom(N, n) for n in n_vals])
+        )
+        ap += float(np.sum(np.exp(log_p) * (i / n_vals) ** 2))
+    return ap / R
+
+
 def summarize_ranking(y_correct, correct_score):
     y_correct = np.asarray(y_correct).astype(int)
     correct_score = np.clip(np.asarray(correct_score).astype(float), EPS, 1 - EPS)
     y_error = 1 - y_correct
 
-    correct_rate = float(y_correct.mean())
-    model_error_rate = float(y_error.mean())
+    n_total = int(y_correct.size)
+    n_correct = int(y_correct.sum())
+    n_error = n_total - n_correct
+    correct_rate = float(y_correct.mean()) if n_total > 0 else np.nan
+    model_error_rate = float(y_error.mean()) if n_total > 0 else np.nan
 
     average_precision = (
         float(average_precision_score(y_correct, correct_score))
@@ -176,19 +206,24 @@ def summarize_ranking(y_correct, correct_score):
         else np.nan
     )
 
+    baseline_ap = random_ap_exact(n_total, n_correct)
+    baseline_ap_error = random_ap_exact(n_total, n_error)
+
     return {
         "correct_rate": correct_rate,
         "model_error_rate": model_error_rate,
         "average_precision": average_precision,
+        "baseline_ap": baseline_ap,
         "ap_lift_over_baseline": (
-            float(average_precision / correct_rate)
-            if correct_rate > 0 and not np.isnan(average_precision)
+            float(average_precision / baseline_ap)
+            if np.isfinite(baseline_ap) and baseline_ap > 0 and not np.isnan(average_precision)
             else np.nan
         ),
         "average_precision_error": average_precision_error,
+        "baseline_ap_error": baseline_ap_error,
         "ap_error_lift_over_baseline": (
-            float(average_precision_error / model_error_rate)
-            if model_error_rate > 0 and not np.isnan(average_precision_error)
+            float(average_precision_error / baseline_ap_error)
+            if np.isfinite(baseline_ap_error) and baseline_ap_error > 0 and not np.isnan(average_precision_error)
             else np.nan
         ),
     }
