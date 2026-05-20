@@ -10,7 +10,7 @@ The core result documented here is a calibrated uncertainty-estimation pipeline
 for GPT-OSS-20B legal-check outputs:
 
 - selected scorers: `entailment`, `noncontradiction`, `semantic_density`
-- check-to-test aggregation: `gated_noisy_or`
+- check-to-test aggregation: `gated_soft_or` (the gated noisy-OR rule described in the thesis)
 - threshold: `0.335`
 - gate floor: `0.235`
 - second-stage judge: `openai/gpt-oss-120b`
@@ -18,7 +18,7 @@ for GPT-OSS-20B legal-check outputs:
 The final production artifact is:
 
 ```text
-evaluation/ensemble_config_threshold_0.335_gate_0.235_gpt120b_judge.json
+evaluation/ensemble_config_threshold_0.335_gate_0.235_.json
 ```
 
 ## Data Availability
@@ -47,7 +47,7 @@ uncertainty_estimation/
     ├── calibration.ipynb
     ├── calibration_helpers.py
     ├── ue_gpt20b_support.py
-    ├── ensemble_config_threshold_0.335_gate_0.235_gpt120b_judge.json
+    ├── ensemble_config_threshold_0.335_gate_0.235_.json
     ├── Epic6_GT.csv
     ├── calibration_copy_thesis_report_assets/   # rendered figures from calibration.ipynb
     └── data/                                    # gitignored: generated ensemble runs
@@ -109,7 +109,7 @@ logic for:
 - loading ensemble files
 - q05/q95 scaling
 - check-to-test aggregation
-- noisy-OR and gated noisy-OR
+- `soft_or` and `gated_soft_or` (the noisy-OR rule used in the thesis)
 - threshold metrics such as precision, recall, F1, F2, and AP-error
 - summary tables used by the calibration notebook
 
@@ -128,10 +128,13 @@ helpers used during GPT-OSS-20B runs:
 
 ## Calibration Artifact
 
-### `evaluation/ensemble_config_threshold_0.335_gate_0.235_gpt120b_judge.json`
+### `evaluation/ensemble_config_threshold_0.335_gate_0.235_.json`
 
 Minimal production configuration exported from the calibration notebook. It is
-the file copied into the deployed `ue_service`.
+the basis for the configuration deployed in the IntelliProcure `ue_service`,
+where the deployed copy is renamed to
+`ensemble_config_threshold_0.335_gate_0.235_gpt120b_judge.json`, labels the
+aggregation as `gated_noisy_or`, and additionally pins `always_flag_test_codes`.
 
 It contains:
 
